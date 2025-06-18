@@ -35,6 +35,7 @@ x-n8n: &service-n8n
     - N8N_USER_MANAGEMENT_JWT_SECRET
     
     # Domain and SSL Configuration
+    - N8N_LISTEN_ADDRESS=0.0.0.0
     - WEBHOOK_URL=https://n8n.rocketmonk.com
     - N8N_EDITOR_BASE_URL=https://n8n.rocketmonk.com 
     - N8N_PROTOCOL=https
@@ -193,10 +194,10 @@ services:
         fi
         
         # Instalar nodos personalizados si existen
-        if [ -f 'custom-nodes/package.json' ]; then
+        if [ -f '/opt/custom-nodes/package.json' ]; then
           echo "Instalando nodos personalizados..."
           cd /home/node/.n8n/custom
-          cp /custom-nodes/package.json .
+          cp /opt/custom-nodes/package.json .
           npm install
         fi
         
