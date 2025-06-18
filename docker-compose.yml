@@ -41,8 +41,8 @@ x-n8n: &service-n8n
     - N8N_PROTOCOL=https
     - N8N_HOST=n8n.rocketmonk.com
     - N8N_PORT=5678
-    - N8N_SECURE_COOKIE=true
-    - N8N_COOKIES_SECURE=true
+    - N8N_SECURE_COOKIE=false
+    - N8N_COOKIES_SECURE=false
     
     # Proxy and Security Configuration
     - N8N_PROXY_TRUSTED_HOSTS=n8n.rocketmonk.com,localhost,*.rocketmonk.com
