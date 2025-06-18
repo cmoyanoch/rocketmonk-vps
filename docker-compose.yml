@@ -3,6 +3,8 @@ volumes:
   postgres_storage:
   ollama_storage:
   qdrant_storage:
+  redis_data:
+    driver: local
 
 networks:
   demo:
@@ -357,8 +359,3 @@ services:
     depends_on:
       ollama-gpu-amd:
         condition: service_healthy
-
-# Volúmenes adicionales
-volumes:
-  redis_data:
-    driver: local
