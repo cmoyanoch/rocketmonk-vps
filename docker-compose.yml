@@ -194,10 +194,10 @@ services:
         fi
         
         # Instalar nodos personalizados si existen
-        if [ -f '/opt/custom-nodes/package.json' ]; then
+        if [ -f 'custom-nodes/package.json' ]; then
           echo "Instalando nodos personalizados..."
           cd /home/node/.n8n/custom
-          cp /opt/custom-nodes/package.json .
+          cp /custom-nodes/package.json .
           npm install
         fi
         
