@@ -192,15 +192,7 @@ services:
           npm init -y
           echo "Directorio de nodos personalizados creado"
         fi
-        
-        # Instalar nodos personalizados si existen
-        if [ -f '/opt/custom-nodes/package.json' ]; then
-          echo "Instalando nodos personalizados..."
-          cd /home/node/.n8n/custom
-          cp /opt/custom-nodes/package.json .
-          npm install
-        fi
-        
+                
         echo "Iniciando n8n..."
         n8n start
     depends_on:
