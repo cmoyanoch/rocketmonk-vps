@@ -52,7 +52,6 @@ x-n8n: &service-n8n
     - OLLAMA_HOST=ollama:11434
     
     # Performance Optimization for cPanel
-    - EXECUTIONS_PROCESS=main
     - EXECUTIONS_TIMEOUT=900
     - EXECUTIONS_TIMEOUT_MAX=1800
     - GENERIC_TIMEZONE=${TIMEZONE:-America/Santiago}
