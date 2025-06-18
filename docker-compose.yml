@@ -1,0 +1,364 @@
+volumes:
+  n8n_storage:
+  postgres_storage:
+  ollama_storage:
+  qdrant_storage:
+
+networks:
+  demo:
+    external: false
+    name: automation_network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+x-n8n: &service-n8n
+  image: n8nio/n8n:latest
+  networks: ["demo"]
+  environment:
+    # Database configuration
+    - DB_TYPE=postgresdb
+    - DB_POSTGRESDB_HOST=postgres
+    - DB_POSTGRESDB_USER=${POSTGRES_USER}
+    - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
+    
+    # n8n Core Configuration
+    - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+    - N8N_RUNNERS_ENABLED=true
+    - N8N_DIAGNOSTICS_ENABLED=false
+    - N8N_PERSONALIZATION_ENABLED=false
+    - N8N_ENCRYPTION_KEY
+    - N8N_USER_MANAGEMENT_JWT_SECRET
+    
+    # Domain and SSL Configuration
+    - WEBHOOK_URL=https://n8n.rocketmonk.com
+    - N8N_EDITOR_BASE_URL=https://n8n.rocketmonk.com 
+    - N8N_PROTOCOL=https
+    - N8N_HOST=n8n.rocketmonk.com
+    - N8N_PORT=5678
+    - N8N_SECURE_COOKIE=true
+    - N8N_COOKIES_SECURE=true
+    
+    # Proxy and Security Configuration
+    - N8N_PROXY_TRUSTED_HOSTS=n8n.rocketmonk.com,localhost,*.rocketmonk.com
+    - N8N_METRICS=true
+    - N8N_LOG_LEVEL=info
+    
+    # AI Integration
+    - OLLAMA_HOST=ollama:11434
+    
+    # Performance Optimization for cPanel
+    - EXECUTIONS_PROCESS=main
+    - EXECUTIONS_TIMEOUT=900
+    - EXECUTIONS_TIMEOUT_MAX=1800
+    - GENERIC_TIMEZONE=${TIMEZONE:-America/Santiago}
+    
+  env_file:
+    - .env
+
+x-ollama: &service-ollama
+  image: ollama/ollama:latest
+  networks: ["demo"]
+  restart: unless-stopped
+  ports:
+    - "${OLLAMA_PORT:-11434}:11434"
+  volumes:
+    - ollama_storage:/root/.ollama
+  environment:
+    - OLLAMA_HOST=0.0.0.0
+    - OLLAMA_ORIGINS=*
+    - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:-5m}
+    - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_MODELS:-2}
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+
+x-init-ollama: &init-ollama
+  image: ollama/ollama:latest
+  networks: ["demo"]
+  volumes:
+    - ollama_storage:/root/.ollama
+  entrypoint: /bin/sh
+  environment:
+    - OLLAMA_HOST=ollama:11434
+  command:
+    - "-c"
+    - |
+      echo "Esperando a que Ollama esté disponible..."
+      until curl -s http://ollama:11434/api/tags; do
+        echo "Ollama no está listo, esperando..."
+        sleep 5
+      done
+      echo "Descargando modelo llama3.2..."
+      ollama pull llama3.2:3b
+      echo "Descargando modelo de embeddings..."
+      ollama pull nomic-embed-text
+      echo "Modelos descargados correctamente"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    hostname: postgres
+    container_name: automation_postgres
+    networks: ["demo"]
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB=${POSTGRES_DB:-n8n}
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    volumes:
+      - postgres_storage:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB:-n8n}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Optimización para hosting compartido
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+    command: >
+      postgres
+      -c shared_buffers=128MB
+      -c effective_cache_size=256MB
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
+      -c max_connections=50
+
+  n8n-import:
+    <<: *service-n8n
+    hostname: n8n-import
+    container_name: n8n-import
+    entrypoint: /bin/sh
+    command:
+      - "-c"
+      - |
+        echo "Importando credenciales y workflows..."
+        if [ -d "/demo-data/credentials" ]; then
+          n8n import:credentials --separate --input=/demo-data/credentials
+        fi
+        if [ -d "/demo-data/workflows" ]; then
+          n8n import:workflow --separate --input=/demo-data/workflows
+        fi
+        echo "Importación completada"
+    volumes:
+      - ./n8n/demo-data:/demo-data
+      - ./workflows:/workflows
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - import
+
+  n8n:
+    <<: *service-n8n
+    hostname: n8n
+    container_name: automation_n8n
+    restart: unless-stopped
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    volumes:
+      - n8n_storage:/home/node/.n8n
+      - ./n8n/demo-data:/demo-data
+      - ./shared:/data/shared
+      - ./workflows:/opt/workflows
+      - ./custom-nodes:/opt/custom-nodes
+    entrypoint: ["/bin/sh"]
+    command: 
+      - "-c"
+      - |
+        echo "Configurando n8n..."
+        
+        # Crear directorio para nodos personalizados
+        if [ ! -d '/home/node/.n8n/custom' ]; then
+          mkdir -p /home/node/.n8n/custom
+          cd /home/node/.n8n/custom
+          npm init -y
+          echo "Directorio de nodos personalizados creado"
+        fi
+        
+        # Instalar nodos personalizados si existen
+        if [ -f '/opt/custom-nodes/package.json' ]; then
+          echo "Instalando nodos personalizados..."
+          cd /home/node/.n8n/custom
+          cp /opt/custom-nodes/package.json .
+          npm install
+        fi
+        
+        echo "Iniciando n8n..."
+        n8n start
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Optimización para hosting compartido
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    hostname: qdrant
+    container_name: automation_qdrant
+    networks: ["demo"]
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+      - ./config/qdrant.yaml:/qdrant/config/production.yaml
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Optimización para hosting compartido
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # Apache Proxy para cPanel
+  apache-proxy:
+    image: httpd:2.4-alpine
+    container_name: automation_apache
+    networks: ["demo"]
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./config/apache/httpd.conf:/usr/local/apache2/conf/httpd.conf
+      - ./config/apache/vhosts.conf:/usr/local/apache2/conf/extra/httpd-vhosts.conf
+      - ./ssl:/usr/local/apache2/conf/ssl
+      - ./logs/apache:/usr/local/apache2/logs
+    depends_on:
+      n8n:
+        condition: service_healthy
+    profiles:
+      - proxy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis para caché (opcional)
+  redis:
+    image: redis:7-alpine
+    container_name: automation_redis
+    networks: ["demo"]
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-automation_redis}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - cache
+    # Optimización para hosting compartido
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+
+  # Servicios Ollama con perfiles optimizados
+  ollama-cpu:
+    profiles: ["cpu"]
+    <<: *service-ollama
+    container_name: automation_ollama_cpu
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+
+  ollama-gpu:
+    profiles: ["gpu-nvidia"]
+    <<: *service-ollama
+    container_name: automation_ollama_gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+        limits:
+          memory: 4G
+
+  ollama-gpu-amd:
+    profiles: ["gpu-amd"]
+    <<: *service-ollama
+    container_name: automation_ollama_amd
+    image: ollama/ollama:rocm
+    devices:
+      - "/dev/kfd"
+      - "/dev/dri"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # Servicios de inicialización de modelos
+  ollama-pull-llama-cpu:
+    profiles: ["cpu"]
+    <<: *init-ollama
+    container_name: ollama-init-cpu
+    depends_on:
+      ollama-cpu:
+        condition: service_healthy
+
+  ollama-pull-llama-gpu:
+    profiles: ["gpu-nvidia"]
+    <<: *init-ollama
+    container_name: ollama-init-gpu
+    depends_on:
+      ollama-gpu:
+        condition: service_healthy
+
+  ollama-pull-llama-gpu-amd:
+    profiles: ["gpu-amd"]
+    <<: *init-ollama
+    container_name: ollama-init-amd
+    image: ollama/ollama:rocm
+    depends_on:
+      ollama-gpu-amd:
+        condition: service_healthy
+
+# Volúmenes adicionales
+volumes:
+  redis_data:
+    driver: local
