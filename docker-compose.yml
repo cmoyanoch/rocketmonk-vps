@@ -36,18 +36,20 @@ x-n8n: &service-n8n
     
     # Domain and SSL Configuration
     - N8N_LISTEN_ADDRESS=0.0.0.0
-    - WEBHOOK_URL=https://n8n.rocketmonk.com
-    - N8N_EDITOR_BASE_URL=https://n8n.rocketmonk.com 
+    - WEBHOOK_URL=http://n8n.rocketmonk.com
+    - N8N_EDITOR_BASE_URL=http://n8n.rocketmonk.com 
     - N8N_PROTOCOL=http
-    - N8N_HOST=localhost
+    - N8N_HOST=0.0.0.0
     - N8N_PORT=5678
     - N8N_SECURE_COOKIE=false
     - N8N_COOKIES_SECURE=false
-    
+    - N8N_DISABLE_PRODUCTION_MAIN_PROCESS=false 
+   
     # Proxy and Security Configuration
-    - N8N_PROXY_TRUSTED_HOSTS=n8n.rocketmonk.com,localhost,*.rocketmonk.com
+    - N8N_PROXY_TRUSTED_HOSTS=*,n8n.rocketmonk.com,localhost,127.0.0.1,*.rocketmonk.com
     - N8N_METRICS=true
     - N8N_LOG_LEVEL=info
+    - N8N_DISABLE_HOST_CHECK=true
     
     # AI Integration
     - OLLAMA_HOST=ollama:11434
@@ -205,7 +207,7 @@ services:
           memory: 1G
           cpus: '1.0'
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5678/"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:5678/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -238,32 +240,7 @@ services:
           memory: 512M
           cpus: '0.5'
 
-  # Apache Proxy para cPanel
-  apache-proxy:
-    image: httpd:2.4-alpine
-    container_name: automation_apache
-    networks: ["demo"]
-    restart: unless-stopped
-    ports:
-      - "${HTTP_PORT:-8080}:80"
-      - "${HTTPS_PORT:-8443}:443"
-    volumes:
-      - ./config/apache/httpd.conf:/usr/local/apache2/conf/httpd.conf
-      - ./config/apache/vhosts.conf:/usr/local/apache2/conf/extra/httpd-vhosts.conf
-      - ./ssl:/usr/local/apache2/conf/ssl
-      - ./logs/apache:/usr/local/apache2/logs
-    depends_on:
-      n8n:
-        condition: service_healthy
-    profiles:
-      - proxy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
-  # Redis para caché (opcional)
   redis:
     image: redis:7-alpine
     container_name: automation_redis
@@ -351,3 +328,4 @@ services:
     depends_on:
       ollama-gpu-amd:
         condition: service_healthy
+  
